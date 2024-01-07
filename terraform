@@ -1,1 +1,94 @@
+provider "aws" {
+  version = "~> 3.0"
+  region  = "eu-west-2" 
+}
 
+# Existing VPC
+data "aws_vpcs" "existing_vpc" {
+  ids = ["vpc-0a01d4054a3d92293"]
+}
+
+# Existing Subnets
+data "aws_subnet_ids" "existing_subnets" {
+  vpc_id = data.aws_vpcs.existing_vpc.ids[0]
+}
+
+resource "aws_security_group" "my_sg" {
+  vpc_id = data.aws_vpcs.existing_vpc.ids[0]
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+}
+
+resource "aws_launch_configuration" "my_lc" {
+  name        = "MyLaunchConfig"
+  image_id    = "ami-0e5f882be1900e43b"
+  instance_type = "t2.medium"
+  security_groups = [aws_security_group.my_sg.id]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_autoscaling_group" "my_asg" {
+  desired_capacity     = 2
+  max_size             = 4
+  min_size             = 1
+  vpc_zone_identifier  = data.aws_subnet_ids.existing_subnets.ids
+  launch_configuration = aws_launch_configuration.my_lc.id
+}
+
+resource "aws_lb" "my_alb" {
+  name               = "MyALB"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.my_sg.id]
+  enable_deletion_protection = false
+
+  enable_cross_zone_load_balancing = true
+
+  enable_http2        = true
+  idle_timeout        = 60
+
+  subnets = data.aws_subnet_ids.existing_subnets.ids
+}
+
+resource "aws_lb_target_group" "my_target_group" {
+  name     = "MyTargetGroup"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = data.aws_vpcs.existing_vpc.ids[0]
+
+  health_check {
+    interval            = 30
+    path                = "/"
+    port                = 80
+    protocol            = "HTTP"
+    timeout             = 10
+    healthy_threshold   = 3
+    unhealthy_threshold = 3
+  }
+}
+
+resource "aws_lb_listener" "my_listener" {
+  load_balancer_arn = aws_lb.my_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    target_group_arn = aws_lb_target_group.my_target_group.arn
+    type             = "forward"
+  }
+}
